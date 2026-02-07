@@ -17,13 +17,13 @@ export default function Home() {
   // 1. Fetch Library & Daily Verse on Load
   useEffect(() => {
     // Get Library
-    fetch("http://127.0.0.1:8000/library")
+    fetch("https://atharvaveda-api.onrender.com/library")
       .then((res) => res.json())
       .then((data) => setLibraryData(data.books || []))
       .catch((err) => console.error("Library fetch failed:", err));
 
     // Get Verse of the Day
-    fetch("http://127.0.0.1:8000/random")
+    fetch("https://atharvaveda-api.onrender.com/random")
       .then((res) => res.json())
       .then((data) => setDailyVerse(data))
       .catch((err) => console.error("Random verse failed:", err));
@@ -37,7 +37,7 @@ export default function Home() {
     setSilenceMessage(""); // Reset message
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/solve", {
+      const res = await fetch("https://atharvaveda-api.onrender.com/solve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ problem: query }),
