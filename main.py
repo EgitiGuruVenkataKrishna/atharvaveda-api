@@ -11,7 +11,6 @@ import uvicorn
 # --- 1. INITIALIZE THE APP ---
 app = FastAPI(title="AtharvaVeda Life OS")
 
-# Allow Frontend to talk to Backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,48 +20,63 @@ app.add_middleware(
 )
 
 # --- 2. CLOUD CREDENTIALS ---
-# (Using the keys you provided)
 QDRANT_URL = "https://3afbb0bc-aaf3-49f2-a40c-d2d2c45580bc.us-east4-0.gcp.cloud.qdrant.io"
 QDRANT_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.COF5HUNtq5GzENkLrZdIZDRN9FFoT_q4yy00kdeVaS8"
 
 # CONFIG
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# On Render, the data folder is in the root, same as main.py
 JSON_PATH = os.path.join(BASE_DIR, "data", "atharva_dataset.json")
 COLLECTION_NAME = "atharva_knowledge"
 
-# --- 3. LOAD AI MODELS ---
-print("--- CONNECTING TO CLOUD BRAIN ---")
-try:
-    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_KEY)
-    # We load the model once when the server starts
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    print("--- SYSTEM READY (CLOUD MODE) ---")
-except Exception as e:
-    print(f"--- CONNECTION FAILED: {e} ---")
+# Global variables for Lazy Loading
+client = None
+embeddings = None
+
+# Helper function to load AI only when needed
+def get_ai():
+    global client, embeddings
+    
+    # 1. Connect to DB if not connected
+    if client is None:
+        print("--- CONNECTING TO CLOUD DB ---")
+        try:
+            client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_KEY)
+        except Exception as e:
+            print(f"DB Connection Failed: {e}")
+
+    # 2. Load Model if not loaded
+    if embeddings is None:
+        print("--- LOADING AI MODEL (LAZY LOAD) ---")
+        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    
+    return client, embeddings
 
 class UserQuery(BaseModel):
     problem: str
 
-# --- 4. API ENDPOINTS ---
+# --- 3. API ENDPOINTS ---
 
 @app.get("/")
 def health_check():
+    # This endpoint is fast because it doesn't touch the AI
     return {"status": "Online", "message": "Atharva Veda API is running."}
 
 @app.post("/solve")
 def solve_problem(query: UserQuery):
-    # Convert user text to vector
-    vector = embeddings.embed_query(query.problem)
+    # Load AI now (The first user will wait a few seconds, but the server won't crash)
+    db_client, ai_model = get_ai()
     
-    # Search Cloud DB
-    results = client.search(
+    if not ai_model or not db_client:
+        return {"solutions": [], "message": "System is warming up. Please try again in 10 seconds."}
+
+    vector = ai_model.embed_query(query.problem)
+    
+    results = db_client.search(
         collection_name=COLLECTION_NAME,
         query_vector=vector,
         limit=3
     )
 
-    # Silence Logic
     if not results or results[0].score < 0.25:
         return {"solutions": [], "message": "The Veda is silent on this modern matter. Meditate on the question and try again."}
 
@@ -81,8 +95,7 @@ def solve_problem(query: UserQuery):
 @app.get("/library")
 def get_library():
     if not os.path.exists(JSON_PATH):
-        return {"error": "Library file not found", "path": JSON_PATH}
-    
+        return {"error": "Library file not found"}
     with open(JSON_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
     return {"books": data}
@@ -91,10 +104,8 @@ def get_library():
 def get_random_verse():
     if not os.path.exists(JSON_PATH):
         return {"error": "Library file not found"}
-    
     with open(JSON_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
-    
     random_hymn = random.choice(data)
     return {
         "title": random_hymn['title'],
