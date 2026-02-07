@@ -1,76 +1,106 @@
-import json
 import os
+import json
+import random
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct, VectorParams, Distance
 from langchain_huggingface import HuggingFaceEmbeddings
+import uvicorn
 
-# --- CLOUD CREDENTIALS ---
+# --- 1. INITIALIZE THE APP ---
+app = FastAPI(title="AtharvaVeda Life OS")
+
+# Allow Frontend to talk to Backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- 2. CLOUD CREDENTIALS ---
+# (Using the keys you provided)
 QDRANT_URL = "https://3afbb0bc-aaf3-49f2-a40c-d2d2c45580bc.us-east4-0.gcp.cloud.qdrant.io"
 QDRANT_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.COF5HUNtq5GzENkLrZdIZDRN9FFoT_q4yy00kdeVaS8"
 
 # CONFIG
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
-JSON_PATH = os.path.join(PROJECT_ROOT, "data", "atharva_dataset.json")
+# On Render, the data folder is in the root, same as main.py
+JSON_PATH = os.path.join(BASE_DIR, "data", "atharva_dataset.json")
 COLLECTION_NAME = "atharva_knowledge"
 
-def ingest():
-    print("--- 1. CONNECTING TO CLOUD BRAIN ---")
-    
-    # Initialize Embedding Model
-    print("Loading AI Model (all-MiniLM-L6-v2)...")
+# --- 3. LOAD AI MODELS ---
+print("--- CONNECTING TO CLOUD BRAIN ---")
+try:
+    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_KEY)
+    # We load the model once when the server starts
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    
-    # Initialize Cloud Database
-    try:
-        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_KEY)
-        print(f"Connected to Qdrant Cloud: {QDRANT_URL}")
-    except Exception as e:
-        print(f"Connection Failed: {e}")
-        return
+    print("--- SYSTEM READY (CLOUD MODE) ---")
+except Exception as e:
+    print(f"--- CONNECTION FAILED: {e} ---")
 
-    # Reset collection
-    if client.collection_exists(COLLECTION_NAME):
-        client.delete_collection(COLLECTION_NAME)
+class UserQuery(BaseModel):
+    problem: str
+
+# --- 4. API ENDPOINTS ---
+
+@app.get("/")
+def health_check():
+    return {"status": "Online", "message": "Atharva Veda API is running."}
+
+@app.post("/solve")
+def solve_problem(query: UserQuery):
+    # Convert user text to vector
+    vector = embeddings.embed_query(query.problem)
     
-    client.create_collection(
+    # Search Cloud DB
+    results = client.search(
         collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+        query_vector=vector,
+        limit=3
     )
 
-    print("--- 2. UPLOADING DATA ---")
+    # Silence Logic
+    if not results or results[0].score < 0.25:
+        return {"solutions": [], "message": "The Veda is silent on this modern matter. Meditate on the question and try again."}
+
+    formatted = []
+    for hit in results:
+        payload = hit.payload
+        formatted.append({
+            "title": payload['title'],
+            "verse": payload['content'][:300] + "...",
+            "full_text": payload['content'],
+            "source": f"Book {payload['book']}, Hymn {payload['hymn_num']}",
+            "score": hit.score
+        })
+    return {"solutions": formatted, "message": "Wisdom Found"}
+
+@app.get("/library")
+def get_library():
     if not os.path.exists(JSON_PATH):
-        print(f"ERROR: Could not find {JSON_PATH}")
-        return
-
+        return {"error": "Library file not found", "path": JSON_PATH}
+    
     with open(JSON_PATH, "r", encoding="utf-8") as f:
-        hymns = json.load(f)
+        data = json.load(f)
+    return {"books": data}
 
-    print(f"Found {len(hymns)} hymns. Converting and uploading...")
-
-    points = []
-    for idx, hymn in enumerate(hymns):
-        text_to_embed = f"{hymn['title']}. {hymn['content']}"
-        vector = embeddings.embed_query(text_to_embed)
-        
-        points.append(PointStruct(
-            id=idx,
-            vector=vector,
-            payload={
-                "title": hymn['title'],
-                "book": hymn['book'],
-                "hymn_num": hymn['hymn'],
-                "content": hymn['content'],
-                "page": hymn['page']
-            }
-        ))
-
-        if (idx + 1) % 50 == 0:
-            print(f"Processed {idx + 1} hymns...")
-
-    # Upload in batch
-    client.upsert(collection_name=COLLECTION_NAME, points=points)
-    print(f"\n--- SUCCESS: Brain uploaded to Cloud with {len(points)} memories. ---")
+@app.get("/random")
+def get_random_verse():
+    if not os.path.exists(JSON_PATH):
+        return {"error": "Library file not found"}
+    
+    with open(JSON_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    random_hymn = random.choice(data)
+    return {
+        "title": random_hymn['title'],
+        "verse": random_hymn['content'][:250] + "...",
+        "source": f"Book {random_hymn['book']}, Hymn {random_hymn['hymn']}"
+    }
 
 if __name__ == "__main__":
-    ingest()
+    uvicorn.run(app, host="0.0.0.0", port=10000)
