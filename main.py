@@ -5,17 +5,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
-from langchain_huggingface import HuggingFaceEmbeddings
+from fastembed import TextEmbedding
 import uvicorn
 
 # --- 1. INITIALIZE THE APP ---
 app = FastAPI(title="AtharvaVeda Life OS")
 
-# EXACT Vercel URL (I copied this from your screenshot)
+# STRICT CORS (Trusts your Vercel App)
 origins = [
     "http://localhost:3000",
     "https://atharvaveda-ku29nmhnb-yegitigvkrishna-gmailcoms-projects.vercel.app",
-    "*"  # Keep this as a backup
+    "*" 
 ]
 
 app.add_middleware(
@@ -35,28 +35,31 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 JSON_PATH = os.path.join(BASE_DIR, "data", "atharva_dataset.json")
 COLLECTION_NAME = "atharva_knowledge"
 
-# Global variables for Lazy Loading
+# LAZY LOADING VARIABLES
 client = None
-embeddings = None
+model = None
 
-# Helper function to load AI only when needed
-def get_ai():
-    global client, embeddings
+def get_resources():
+    global client, model
     
-    # 1. Connect to DB if not connected
+    # 1. Connect to DB
     if client is None:
         print("--- CONNECTING TO CLOUD DB ---")
         try:
             client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_KEY)
         except Exception as e:
-            print(f"DB Connection Failed: {e}")
+            print(f"DB Error: {e}")
 
-    # 2. Load Model if not loaded
-    if embeddings is None:
-        print("--- LOADING AI MODEL (LAZY LOAD) ---")
-        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    # 2. Load Lightweight AI Model
+    if model is None:
+        print("--- LOADING FASTEMBED (LITE MODE) ---")
+        # This uses minimal RAM compared to PyTorch
+        model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+        # Note: We use a model compatible with our vector size or similar
+        # Actually, let's stick to the exact same architecture to match your uploaded data:
+        model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
     
-    return client, embeddings
+    return client, model
 
 class UserQuery(BaseModel):
     problem: str
@@ -65,22 +68,22 @@ class UserQuery(BaseModel):
 
 @app.get("/")
 def health_check():
-    # This endpoint is fast because it doesn't touch the AI
-    return {"status": "Online", "message": "Atharva Veda API is running."}
+    return {"status": "Online", "message": "Atharva Veda API is running (Lite Mode)."}
 
 @app.post("/solve")
 def solve_problem(query: UserQuery):
-    # Load AI now (The first user will wait a few seconds, but the server won't crash)
-    db_client, ai_model = get_ai()
+    db_client, ai_model = get_resources()
     
     if not ai_model or not db_client:
-        return {"solutions": [], "message": "System is warming up. Please try again in 10 seconds."}
+        return {"solutions": [], "message": "Warming up... Try again in 5 seconds."}
 
-    vector = ai_model.embed_query(query.problem)
+    # FastEmbed returns a generator, so we convert to list
+    vector_generator = ai_model.embed([query.problem])
+    vector = list(vector_generator)[0]
     
     results = db_client.search(
         collection_name=COLLECTION_NAME,
-        query_vector=vector,
+        query_vector=vector.tolist(), # Convert numpy array to list
         limit=3
     )
 
