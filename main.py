@@ -11,9 +11,16 @@ import uvicorn
 # --- 1. INITIALIZE THE APP ---
 app = FastAPI(title="AtharvaVeda Life OS")
 
+# EXACT Vercel URL (I copied this from your screenshot)
+origins = [
+    "http://localhost:3000",
+    "https://atharvaveda-ku29nmhnb-yegitigvkrishna-gmailcoms-projects.vercel.app",
+    "*"  # Keep this as a backup
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
